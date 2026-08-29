@@ -66,8 +66,8 @@ def settings_info() -> dict:
     prov = PROVIDERS.get(s.provider)
     return {
         "provider": s.provider,
-        "model": s.model or (prov.model if prov else ""),
-        "small_model": s.small_model or (prov.small_model if prov else ""),
+        "model": s.model or (prov.configured_model() if prov else ""),
+        "small_model": s.small_model or (prov.configured_small_model() if prov else ""),
         "base_url": s.base_url or "",
         "custom_key_set": bool(s.api_key),
         # Ids of providers the user disabled in the Models grid; the frontend

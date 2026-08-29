@@ -37,6 +37,11 @@ anonymous.
 
 - Keep `.env` out of git — it's gitignored, and so are `credentials.json` and
   `*token*.json`.
+- The dashboard has no application-level authentication. Keep its default
+  loopback binding. If remote access is required, set both
+  `WAKU_DASHBOARD_HOST` and `WAKU_DASHBOARD_ALLOW_REMOTE=1` and publish it only
+  through an access-controlled private network such as Tailscale, never a
+  public interface.
 - Inbound gateways (WhatsApp-style webhooks) must verify request signatures
   before acting. Outbound ones (Telegram, Discord) dial out and aren't exposed.
 - Review a community skill or extension before installing it. A `SKILL.md` is

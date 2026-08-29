@@ -227,7 +227,8 @@ async function pinModel(provider, model, action){
 // ACTIVE provider (settings.provider) can't be disabled (server guards too).
 function providerCardStatus(p, st){
   const keySet = !!(p.fields && p.fields[0] && p.fields[0].configured);
-  if (!keySet) return "unconfigured";
+  const requiredSet = (p.fields || []).filter(f => f.required).every(f => f.configured);
+  if (!keySet || !requiredSet) return "unconfigured";
   return (st.disabled_providers || []).includes(p.key) ? "configured" : "enabled";
 }
 
@@ -266,8 +267,8 @@ async function toggleProvider(provider, disabled){
   else { editing = false; await refresh(); }
 }
 
-// --- edit modal: API key (+ main/small model when this provider is current,
-// with a searchable live catalog) and a "set as current" action.
+// --- edit modal: API key, optional endpoint/protocol fields, and main/small
+// models when the provider is current or owns provider-scoped model fields.
 function openProviderModal(provider){
   markEditing();   // keep the 5s refresh loop from wiping this modal
   const st = (D && D.settings) || {};
@@ -276,33 +277,44 @@ function openProviderModal(provider){
   const current = provider === st.provider;
   const f = (p.fields || [])[0] || {};
   const baseField = (p.fields || []).find(field => field.name.endsWith("_BASE_URL"));
+  const protocolField = (p.fields || []).find(field => field.name.endsWith("_PROTOCOL"));
+  const modelField = (p.fields || []).find(field => field.name.endsWith("_MODEL") && !field.name.endsWith("_SMALL_MODEL"));
+  const smallModelField = (p.fields || []).find(field => field.name.endsWith("_SMALL_MODEL"));
+  const showModels = current || !!modelField;
   const selectedBaseUrl = current && st.base_url ? st.base_url : (baseField?.value || "");
   const root = document.getElementById("prov-modal-root");
   root.innerHTML = `<div class="provmodal-back" onclick="closeProviderModal()">
-    <div class="provmodal${current ? " provmodal-models" : ""}" onclick="event.stopPropagation()">
+    <div class="provmodal${showModels ? " provmodal-models" : ""}" onclick="event.stopPropagation()">
       <div class="u" style="display:flex;justify-content:space-between;align-items:center">
         <b>${esc(p.name)}</b><a class="reveal" onclick="closeProviderModal()">✕</a></div>
       <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
         ${f.configured ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(f.last4 || "")}</span>`
                        : `<span class="srcpill apple">not set</span>`}</span>
         <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>
-      ${baseField ? `<label class="fld"><span>Base URL <span class="meta">(select the API key's region)</span></span>
-        <select id="pm-base-url" onfocus="markEditing()">
+      ${protocolField ? `<label class="fld"><span>Protocol</span>
+        <select id="pm-protocol" onfocus="markEditing()">
+          ${(protocolField.options || []).map((value, index) => {
+            const label = (protocolField.option_labels || [])[index] || value;
+            return `<option value="${escAttr(value)}" ${value===protocolField.value?"selected":""}>${esc(label)}</option>`;
+          }).join("")}
+        </select></label>` : ""}
+      ${baseField ? `<label class="fld"><span>Base URL <span class="meta">${baseField.options?.length ? "(select the API key's region)" : "(include the API version path, for example /v1)"}</span></span>
+        ${baseField.options?.length ? `<select id="pm-base-url" onfocus="markEditing()">
           ${(baseField.options || []).map((url, index) => {
             const label = (baseField.option_labels || [])[index];
             return `<option value="${escAttr(url)}" ${url===selectedBaseUrl?"selected":""}>${label?esc(label)+" — ":""}${esc(url)}</option>`;
           }).join("")}
-        </select></label>` : ""}
-      ${current ? `
-      ${renderModelPicker("pm-model", "Main model (runs the loop; needs tool calling)", st.model || "")}
-      ${renderModelPicker("pm-small-model", "Gate / summary model", st.small_model || "")}` : ""}
+        </select>` : `<input type="url" id="pm-base-url" value="${escAttr(selectedBaseUrl)}" placeholder="${escAttr(baseField.placeholder || "https://api.example.com/v1")}" onfocus="markEditing()">`}</label>` : ""}
+      ${showModels ? `
+      ${renderModelPicker("pm-model", "Main model (runs the loop; needs tool calling)", current ? (st.model || "") : (modelField?.value || ""))}
+      ${renderModelPicker("pm-small-model", "Gate / summary model (optional; defaults to main)", current ? (st.small_model || "") : (smallModelField?.value || ""))}` : ""}
       <div style="display:flex;gap:8px;margin-top:10px">
         <button class="save" id="pm-save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
         ${!current ? `<button class="save ghost" id="pm-make-current" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
       </div>
       <span class="meta" id="pm-msg"></span>
     </div></div>`;
-  if (current) loadModalModels(provider);
+  if (showModels) loadModalModels(provider);
 }
 
 function closeProviderModal(){
@@ -465,11 +477,13 @@ function modalKeyPayload(provider){
   if (key) payload.key = key;
   const baseUrl = document.getElementById("pm-base-url")?.value;
   if (baseUrl) payload.base_url = baseUrl;
+  const protocol = document.getElementById("pm-protocol")?.value;
+  if (protocol) payload.protocol = protocol;
   return payload;
 }
 
 function setProviderModalBusy(activeId, busy){
-  ["pm-save", "pm-make-current"].forEach(id => {
+  ["pm-save", "pm-make-current", "pm-force-save"].forEach(id => {
     const button = document.getElementById(id);
     if (!button) return;
     if (!button.dataset.label) button.dataset.label = button.textContent;
@@ -481,7 +495,10 @@ function setProviderModalBusy(activeId, busy){
   if (busy){
     const msg = document.getElementById("pm-msg");
     if (msg) msg.textContent = activeId === "pm-make-current"
-      ? "Switching provider…" : "Saving and validating changes…";
+      ? "Switching provider…"
+      : activeId === "pm-force-save"
+        ? "Saving without endpoint validation…"
+        : "Saving and validating changes…";
   }
 }
 
@@ -493,7 +510,12 @@ async function submitProviderModal(provider, payload, activeId){
   if (!r.ok){
     setProviderModalBusy(activeId, false);
     const msg = document.getElementById("pm-msg");
-    if (msg) msg.textContent = r.error || "update failed";
+    if (msg && r.can_force){
+      msg.innerHTML = `${esc(r.error || "validation failed")} <button type="button" class="save ghost" id="pm-force-save">Save anyway</button>`;
+      document.getElementById("pm-force-save")?.addEventListener("click", () => {
+        submitProviderModal(provider, {...payload, force: true}, "pm-force-save");
+      });
+    } else if (msg) msg.textContent = r.error || "update failed";
     return;
   }
   editing = false;
@@ -505,7 +527,7 @@ async function saveProviderModal(provider){
   const st = (D && D.settings) || {};
   const payload = modalKeyPayload(provider);
   payload.activate = false;
-  if (provider === st.provider){
+  if (provider === st.provider || document.getElementById("pm-model")){
     payload.model = document.getElementById("pm-model")?.value ?? "";
     payload.small_model = document.getElementById("pm-small-model")?.value ?? "";
   }
@@ -515,5 +537,10 @@ async function saveProviderModal(provider){
 // "Set as current": apply_provider switches provider and picks its default
 // models when none are passed (keeps the key field if one was just typed).
 async function makeCurrentProvider(provider){
-  await submitProviderModal(provider, modalKeyPayload(provider), "pm-make-current");
+  const payload = modalKeyPayload(provider);
+  if (document.getElementById("pm-model")){
+    payload.model = document.getElementById("pm-model")?.value ?? "";
+    payload.small_model = document.getElementById("pm-small-model")?.value ?? "";
+  }
+  await submitProviderModal(provider, payload, "pm-make-current");
 }

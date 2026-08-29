@@ -257,14 +257,29 @@ INTEGRATIONS: tuple[Integration, ...] = (
 
 
 def _integration_from_provider(name: str, provider: Provider) -> Integration:
-    fields = (EnvField(provider.key_env, "API Key", secret=True),)
-    if provider.base_url_env and provider.endpoints:
-        fields += (EnvField(provider.base_url_env, "Base URL", FieldKind.CHOICE,
-                            default=provider.base_url or "",
+    configurable = bool(provider.protocol_env)
+    fields = (EnvField(provider.key_env, "API Key", required=configurable, secret=True),)
+    if provider.protocol_env:
+        fields += (EnvField(provider.protocol_env, "Protocol", FieldKind.CHOICE,
+                            required=True, default=provider.kind,
+                            options=("openai", "anthropic"),
+                            option_labels=("OpenAI-compatible", "Anthropic-compatible")),)
+    if provider.base_url_env:
+        kind = FieldKind.CHOICE if provider.endpoints else FieldKind.TEXT
+        fields += (EnvField(provider.base_url_env, "Base URL", kind,
+                            required=configurable, default=provider.base_url or "",
                             options=tuple(endpoint.base_url for endpoint in provider.endpoints),
+                            placeholder="https://api.example.com/v1" if configurable else "",
                             option_labels=tuple(endpoint.label for endpoint in provider.endpoints)),)
-    return Integration(name, "AI Providers", name.replace("_", " ").title(),
-                       f"Uses {name.replace('_', ' ').title()} models.",
+    if provider.model_env:
+        fields += (EnvField(provider.model_env, "Main model", required=True,
+                            placeholder="provider/model-id"),)
+    if provider.small_model_env:
+        fields += (EnvField(provider.small_model_env, "Gate model",
+                            placeholder="optional; defaults to main model"),)
+    display_name = "Custom API" if name == "custom" else name.replace("_", " ").title()
+    return Integration(name, "AI Providers", display_name,
+                       f"Uses {display_name} models.",
                        fields, None, None, "",
                        ReloadMode.AGENT, lambda env, key=provider.key_env: bool(env.get(key)), _provider_probe)
 
@@ -710,6 +725,7 @@ def test_integration(key: str) -> IntegrationView:
 
 def apply_provider(provider: str, *, key: str | None = None, model: str | None = None,
                    small_model: str | None = None, base_url: str | None = None,
+                   protocol: str | None = None,
                    custom_key: str | None = None, force: bool = False,
                    activate: bool = True) -> ApplyResult:
     """Save provider fields and optionally make that provider active."""
@@ -721,27 +737,55 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
     selected = PROVIDERS[provider]
     switching = activate and provider != previous
     updates: dict[str, str] = {"WAKU_PROVIDER": provider} if activate else {}
-    if model is not None:
-        updates["WAKU_MODEL"] = model
-    elif switching:
-        updates["WAKU_MODEL"] = catalog.default_model_for(provider)
-    if small_model is not None:
-        updates["WAKU_SMALL_MODEL"] = small_model
-    elif switching:
-        updates["WAKU_SMALL_MODEL"] = ""
+
+    candidate_protocol = selected.configured_protocol()
+    if selected.protocol_env:
+        if not (key or os.environ.get(selected.key_env, "")).strip():
+            return ApplyResult(False, error="API key is required for Custom API")
+        candidate_protocol = (protocol or candidate_protocol).strip().lower()
+        if candidate_protocol not in {"openai", "anthropic"}:
+            return ApplyResult(False, error="protocol must be 'openai' or 'anthropic'")
+        candidate_base_url = (base_url or selected.configured_base_url() or "").strip().rstrip("/")
+        parsed = urlsplit(candidate_base_url)
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment):
+            return ApplyResult(False, error="Base URL must be a complete http:// or https:// URL")
+        candidate_model = (model if model is not None else selected.configured_model()).strip()
+        if not candidate_model:
+            return ApplyResult(False, error="Main model is required for Custom API")
+        candidate_small_model = (
+            small_model if small_model is not None else selected.configured_small_model()
+        ).strip() or candidate_model
+        updates[selected.protocol_env] = candidate_protocol
+        updates[selected.base_url_env] = candidate_base_url
+        updates[selected.model_env] = candidate_model
+        updates[selected.small_model_env] = candidate_small_model
+        updates["WAKU_BASE_URL"] = ""
+        if activate or provider == previous:
+            updates["WAKU_MODEL"] = candidate_model
+            updates["WAKU_SMALL_MODEL"] = candidate_small_model
+    else:
+        if model is not None:
+            updates["WAKU_MODEL"] = model
+        elif switching:
+            updates["WAKU_MODEL"] = catalog.default_model_for(provider)
+        if small_model is not None:
+            updates["WAKU_SMALL_MODEL"] = small_model
+        elif switching:
+            updates["WAKU_SMALL_MODEL"] = ""
     if key:
         updates[selected.key_env] = key
     # Regional providers own their endpoint choice.  Keeping it beside that
     # provider's key prevents a MiniMax URL, for example, from leaking into Kimi
     # after a switch.  A legacy WAKU_BASE_URL for the current provider is
     # migrated the next time its endpoint is saved.
-    if selected.base_url_env and (base_url is not None or switching):
+    if selected.base_url_env and not selected.protocol_env and (base_url is not None or switching):
         legacy = os.environ.get("WAKU_BASE_URL", "") if provider == previous else ""
         selected_base_url = (base_url or legacy or selected.configured_base_url() or "").strip()
         if selected_base_url:
             updates[selected.base_url_env] = selected_base_url
         updates["WAKU_BASE_URL"] = ""
-    elif base_url is not None:
+    elif not selected.base_url_env and base_url is not None:
         updates["WAKU_BASE_URL"] = base_url
     if custom_key is not None:
         updates["WAKU_API_KEY"] = custom_key
@@ -749,6 +793,7 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
     # rather than field presence so reopening and saving an unchanged provider
     # does not perform a synchronous network probe every time.
     current_key = os.environ.get(selected.key_env, "")
+    current_protocol = selected.configured_protocol()
     legacy_base_url = os.environ.get("WAKU_BASE_URL", "") if provider == previous else ""
     current_base_url = legacy_base_url or selected.configured_base_url() or ""
     candidate_base_url = (
@@ -760,6 +805,7 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
         base_url is not None
         and candidate_base_url.rstrip("/") != current_base_url.rstrip("/")
     )
+    protocol_changed = bool(selected.protocol_env and candidate_protocol != current_protocol)
     changed_updates = {
         name: value for name, value in updates.items()
         if (os.environ.get(name) or "") != value
@@ -772,10 +818,13 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
         # intentionally reads environment variables, so expose only the
         # candidate values for the duration of this non-writing request.
         candidate_key = key or os.environ.get(selected.key_env, "")
-        if candidate_key and (key_changed or base_url_changed) and not force:
+        if candidate_key and (key_changed or base_url_changed or protocol_changed) and not force:
             probe_names = {"WAKU_PROVIDER", selected.key_env}
             if selected.base_url_env:
                 probe_names.update({selected.base_url_env, "WAKU_BASE_URL"})
+            for name in (selected.protocol_env, selected.model_env, selected.small_model_env):
+                if name:
+                    probe_names.add(name)
             probe_before = {name: os.environ.get(name) for name in probe_names}
             os.environ["WAKU_PROVIDER"] = provider
             os.environ[selected.key_env] = candidate_key
@@ -784,6 +833,9 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
                 os.environ["WAKU_BASE_URL"] = ""
             elif base_url is not None:
                 os.environ["WAKU_BASE_URL"] = base_url
+            for name in (selected.protocol_env, selected.model_env, selected.small_model_env):
+                if name and name in updates:
+                    os.environ[name] = updates[name]
             try:
                 _provider_probe({selected.key_env: candidate_key})
             finally:

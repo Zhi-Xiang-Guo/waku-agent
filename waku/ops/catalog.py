@@ -69,8 +69,10 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
             or (prov.configured_base_url() if prov else None))
     out = {
         "provider": name,
-        "model": s.model or (prov.model if prov else ""),
-        "small_model": s.small_model or (prov.small_model if prov else ""),
+        "model": (s.model if name == s.provider else "")
+                 or (prov.configured_model() if prov else ""),
+        "small_model": (s.small_model if name == s.provider else "")
+                       or (prov.configured_small_model() if prov else ""),
         "endpoint": base or name,
     }
     # Where can this provider's models be listed? An explicit catalog_url wins
@@ -80,7 +82,7 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
     catalog_url = prov.catalog_for(base) if prov is not None else None
     if catalog_url:
         url = catalog_url
-    elif prov is not None and prov.kind == "openai" and base:
+    elif prov is not None and prov.configured_protocol() == "openai" and base:
         url = base.rstrip("/") + "/models"
     else:
         # No catalog endpoint: fall back to the provider's own known defaults

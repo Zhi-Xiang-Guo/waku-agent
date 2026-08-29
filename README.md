@@ -67,6 +67,10 @@ Kimi, GLM, OpenRouter (one key, hundreds of hosted models), OpenCode Zen, or Ope
 set `WAKU_PROVIDER=`, paste the key, done. One dialect in the loop;
 a [~60-line adapter](waku/loop/models.py) handles the rest.
 
+For any OpenAI- or Anthropic-compatible endpoint, open **Models → Custom API** and set its
+protocol, API key, versioned Base URL (for example, `https://api.example.com/v1`), main model,
+and optional gate model. An empty gate model uses the main model.
+
 ## Watch the harness run — the dashboard
 
 ```bash
@@ -75,6 +79,10 @@ waku dashboard          # starts a local server → http://localhost:7777
 
 A small web server you own (`127.0.0.1`, no cloud). The browser is just the UI — the same
 process runs every turn. This is the fastest way to *get* the system.
+
+The dashboard has no application-level authentication. A non-loopback listener requires both
+`WAKU_DASHBOARD_HOST` and `WAKU_DASHBOARD_ALLOW_REMOTE=1`; use that only behind an
+access-controlled private network such as Tailscale, never on a public interface.
 
 A chat dock sits on every tab. Type or **speak**, and watch it flow through the harness on the
 Overview diagram: gate lights up → loop calls a tool → reply comes back → memory updates. The

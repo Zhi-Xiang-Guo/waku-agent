@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from waku.ops import dashboard
 
 # Every path the POST router accepts. `/api/compare` (non-streaming) was removed
@@ -125,6 +127,62 @@ def test_collect_returns_the_keys_the_page_reads():
     src = inspect.getsource(dashboard.collect)
     for key in expected:
         assert f'"{key}"' in src, f"collect() no longer returns: {key}"
+
+
+def test_main_honors_dashboard_host(monkeypatch):
+    """Container deployments can opt into a non-loopback dashboard listener."""
+    address = None
+
+    class StopDashboard(Exception):
+        pass
+
+    class FakeServer:
+        def __init__(self, bind, _handler):
+            nonlocal address
+            address = bind
+
+        def serve_forever(self):
+            raise StopDashboard
+
+    class FakeSupervisor:
+        def __init__(self, *_args):
+            pass
+
+        def reconcile(self):
+            pass
+
+        def status(self, _key):
+            return None
+
+        def shutdown(self):
+            pass
+
+    from waku.gateway import supervisor
+
+    monkeypatch.setenv("WAKU_DASHBOARD_HOST", "0.0.0.0")
+    monkeypatch.setenv("WAKU_DASHBOARD_ALLOW_REMOTE", "1")
+    monkeypatch.setenv("WAKU_DASHBOARD_PORT", "17777")
+    monkeypatch.setattr(dashboard, "ThreadingHTTPServer", FakeServer)
+    monkeypatch.setattr(supervisor, "GatewaySupervisor", FakeSupervisor)
+
+    with pytest.raises(StopDashboard):
+        dashboard.main()
+
+    assert address == ("0.0.0.0", 17777)
+
+
+def test_main_refuses_remote_host_without_explicit_opt_in(monkeypatch):
+    """Changing the bind address alone must not expose the unauthenticated dashboard."""
+    monkeypatch.setenv("WAKU_DASHBOARD_HOST", "0.0.0.0")
+    monkeypatch.delenv("WAKU_DASHBOARD_ALLOW_REMOTE", raising=False)
+    monkeypatch.setattr(
+        dashboard,
+        "ThreadingHTTPServer",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("server must not start")),
+    )
+
+    with pytest.raises(SystemExit, match="WAKU_DASHBOARD_ALLOW_REMOTE"):
+        dashboard.main()
 
 
 def test_the_removed_arena_duplicate_stays_removed():

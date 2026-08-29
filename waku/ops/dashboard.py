@@ -1153,10 +1153,16 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     # Port precedence: WAKU_DASHBOARD_PORT, then the conventional PORT (used by
     # deploy platforms and IDE preview panes), then 7777. If it's taken, walk on.
+    host = os.getenv("WAKU_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    if host not in {"127.0.0.1", "localhost", "::1"} \
+            and os.getenv("WAKU_DASHBOARD_ALLOW_REMOTE") != "1":
+        raise SystemExit(
+            "non-loopback dashboard binding requires WAKU_DASHBOARD_ALLOW_REMOTE=1"
+        )
     base = int(os.getenv("WAKU_DASHBOARD_PORT") or os.getenv("PORT") or PORT)
     for port in range(base, base + 10):  # walk past a busy port instead of crashing
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            server = ThreadingHTTPServer((host, port), Handler)
         except OSError:
             print(f"port {port} busy, trying {port + 1}…")
             continue

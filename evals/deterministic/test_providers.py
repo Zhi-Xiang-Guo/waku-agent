@@ -61,6 +61,7 @@ def test_dashboard_pricing_covers_every_provider(name):
 
 @pytest.mark.parametrize("name", [n for n, p in PROVIDERS.items()
                                   if p.catalog_url is None
+                                  and not p.model_env
                                   and (p.kind == "anthropic" or not p.base_url)])
 def test_model_listing_falls_back_without_a_catalog(name, monkeypatch):
     """Providers with no listable catalog still give the picker their defaults

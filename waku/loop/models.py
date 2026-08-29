@@ -58,11 +58,28 @@ class Provider:
     # override for backwards compatibility, but must not leak across providers.
     base_url_env: str = ""
     endpoints: tuple[ProviderEndpoint, ...] = ()
+    protocol_env: str = ""
+    model_env: str = ""
+    small_model_env: str = ""
 
     def default_pair(self) -> list[str]:
         """[flagship, fast], deduped — the switcher's default picks."""
-        pair = [self.flagship or self.model, self.fast or self.small_model]
+        pair = [self.flagship or self.configured_model(),
+                self.fast or self.configured_small_model()]
         return list(dict.fromkeys(m for m in pair if m))
+
+    def configured_protocol(self) -> str:
+        """Wire format selected for a configurable provider."""
+        configured = os.getenv(self.protocol_env, "").strip() if self.protocol_env else ""
+        return configured or self.kind
+
+    def configured_model(self) -> str:
+        configured = os.getenv(self.model_env, "").strip() if self.model_env else ""
+        return configured or self.model
+
+    def configured_small_model(self) -> str:
+        configured = os.getenv(self.small_model_env, "").strip() if self.small_model_env else ""
+        return configured or self.small_model or (self.configured_model() if self.small_model_env else "")
 
     def configured_base_url(self) -> str | None:
         """Provider-scoped endpoint, falling back to the built-in default."""
@@ -157,6 +174,11 @@ PROVIDERS: dict[str, Provider] = {
     "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
                                "https://opencode.ai/zen/go/v1",
                                "deepseek-v4-flash", "deepseek-v4-flash"),
+    "custom": Provider("openai", "WAKU_CUSTOM_API_KEY", None, "", "",
+                       base_url_env="WAKU_CUSTOM_BASE_URL",
+                       protocol_env="WAKU_CUSTOM_PROTOCOL",
+                       model_env="WAKU_CUSTOM_MODEL",
+                       small_model_env="WAKU_CUSTOM_SMALL_MODEL"),
 }
 
 
@@ -176,6 +198,7 @@ KEY_URLS = {
     "xai": "https://console.x.ai",
     "opencode_zen": "https://opencode.ai/zen",
     "opencode_go": "https://opencode.ai/zen",
+    "custom": "",
 }
 
 
@@ -276,14 +299,19 @@ def get_client(settings: Settings):
                 and _belongs_elsewhere(inherited, settings.provider):
             setattr(settings, attr, "")
 
-    settings.model = settings.model or provider.model
-    settings.small_model = settings.small_model or provider.small_model
+    settings.model = settings.model or provider.configured_model()
+    settings.small_model = settings.small_model or provider.configured_small_model()
     base_url = settings.base_url or provider.configured_base_url()
 
     # a hung network call must never freeze a turn silently
     timeout = float(os.getenv("WAKU_LLM_TIMEOUT", "120"))
 
-    if provider.kind == "anthropic":
+    protocol = provider.configured_protocol()
+    if protocol not in {"openai", "anthropic"}:
+        raise SystemExit(
+            f"{provider.protocol_env or 'provider protocol'} must be 'openai' or 'anthropic'"
+        )
+    if protocol == "anthropic":
         import anthropic
 
         kwargs: dict = {"api_key": api_key, "timeout": timeout}
