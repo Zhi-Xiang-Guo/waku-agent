@@ -11,6 +11,7 @@ that Waku's view flattens away, and how to clean up after a benchmark run.
 
 | backend | console | what Waku's view hides |
 |---|---|---|
+| MemOS | `GET /v1/memories` or the MemOS PostgreSQL authority | extraction decisions, version history, transitions and rebuildable projections |
 | Mem0 | [app.mem0.ai](https://app.mem0.ai) → Memories | its extraction decisions, per-memory history |
 | Zep | [app.getzep.com](https://app.getzep.com) → your project → Graph | the entity/edge graph and validity intervals |
 | LangMem | **none — it is a library, not a service** | nothing; there is no server to look at |
@@ -27,12 +28,43 @@ partition per run.
 
 | backend | env var | default |
 |---|---|---|
+| MemOS | JWT `tenant_id`, `user_id`, `agent_id` claims | no implicit scope |
 | Mem0 | `MEM0_USER_ID` | `waku` |
 | Zep | `ZEP_USER_ID` | `waku` |
 | LangMem | *(namespace is fixed in code)* | — |
 
 If a console looks empty, check this first. Filtering by the wrong user id looks
 exactly like "nothing was stored", and those two things mean opposite things.
+
+---
+
+## MemOS — scoped API and PostgreSQL authority
+
+Start MemOS separately and keep it running while Waku uses it. Then configure:
+
+```bash
+export WAKU_SEMANTIC_STORE=memos
+export WAKU_MEMOS_BASE_URL=http://127.0.0.1:8080
+export WAKU_MEMOS_TOKEN="$(python3 /path/to/memos/scripts/generate-dev-jwt.py \
+  --tenant waku-local --user local-user --agent waku \
+  --subject waku --role USER --role PROJECT_MEMORY_WRITER)"
+```
+
+The local helper creates a short-lived development token. A deployed Waku should receive a token
+from the same identity provider MemOS verifies. The token is the scope: the adapter never sends
+tenant, user, agent, or role values in a request body.
+
+`add()` submits a `DIRECT_MEMORY_COMMAND` and waits for source extraction, authoritative state
+transition, and projection jobs to settle. `search()` uses MemOS hybrid retrieval and only exposes
+the versions selected into its bounded context. `delete()` calls governed self-service erasure,
+which hides the memory in the request transaction and lets the fenced worker remove retained
+content and projections. Waku's flat fact view does not show the retained version history or
+transition log; inspect those through MemOS.
+
+Waku defaults `WAKU_MEMOS_MIN_FUSED_SCORE` to `0.02`. With MemOS's current RRF constant this
+filters a rank-only hit from one candidate channel while retaining evidence corroborated by two
+channels. Set it to `0` when vector-only recall matters more, and measure the resulting miss rate;
+the default is an adapter contract choice, not a benchmarked universal threshold.
 
 ---
 

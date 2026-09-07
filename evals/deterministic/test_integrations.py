@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+from io import BytesIO
 
 import pytest
 
@@ -23,7 +24,7 @@ def _isolate(monkeypatch, tmp_path):
 
 def test_registry_contract():
     items = integrations.registry()
-    assert len(items) == 24
+    assert len(items) == 25
     assert len({item.key for item in items}) == len(items)
     assert {item.key for item in items if item.group == "AI Providers"} == set(PROVIDERS)
     for item in items:
@@ -70,6 +71,39 @@ def test_otel_probe_checks_configured_collector_tcp_port(monkeypatch):
     integrations._otel_probe({"OTEL_EXPORTER_OTLP_ENDPOINT": "localhost:4317"})
 
     assert captured == {"address": ("localhost", 4317), "timeout": 3, "closed": True}
+
+
+def test_memos_probe_uses_configured_endpoint_and_verified_token(monkeypatch):
+    captured = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size):
+            return BytesIO(b'{"items":[]}').read(size)
+
+    def open_request(request, timeout):
+        captured.update(url=request.full_url, authorization=request.headers["Authorization"],
+                        timeout=timeout)
+        return Response()
+
+    monkeypatch.setattr(integrations.urllib.request, "urlopen", open_request)
+
+    integrations._memos_probe(
+        {"WAKU_MEMOS_BASE_URL": "http://memos.test/", "WAKU_MEMOS_TOKEN": "scope-token"}
+    )
+
+    assert captured == {
+        "url": "http://memos.test/v1/memories?limit=1",
+        "authorization": "Bearer scope-token",
+        "timeout": 10,
+    }
 
 
 def test_otel_probe_rejects_endpoint_without_tcp_port():

@@ -89,8 +89,18 @@ def _langmem_store(tmp_path):
     return LangMemFactStore(Settings(home=tmp_path))
 
 
+def _memos_store(tmp_path):
+    """Opt-in because this writes to the explicitly configured MemOS scope."""
+    if os.getenv("WAKU_TEST_MEMOS") != "1":
+        pytest.skip("set WAKU_TEST_MEMOS=1 plus WAKU_MEMOS_TOKEN to include it")
+    from waku.config import Settings
+    from waku.memory.semantic.memos_store import MemosFactStore
+
+    return MemosFactStore(Settings(home=tmp_path))
+
+
 BACKENDS = {"sqlite": _sqlite_store, "supabase": _supabase_store, "mem0": _mem0_store,
-            "zep": _zep_store, "langmem": _langmem_store}
+            "zep": _zep_store, "langmem": _langmem_store, "memos": _memos_store}
 
 
 @pytest.fixture(params=list(BACKENDS), ids=list(BACKENDS))

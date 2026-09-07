@@ -453,6 +453,7 @@ The point of a teaching repo is a readable core; these come alive one at a time,
 | Default (zero setup) | Upgrade | How |
 |---|---|---|
 | SQLite FTS5 keyword memory | Supabase pgvector semantic search | `WAKU_SEMANTIC_STORE=supabase` + [sql/init_supabase.sql](sql/init_supabase.sql) — the exact schema from [launch-rag](https://github.com/ShenSeanChen/launch-rag)/[launch-agentic-rag](https://github.com/ShenSeanChen/launch-agentic-rag) |
+| SQLite row memory | MemOS governed memory service | Run MemOS locally, set `WAKU_SEMANTIC_STORE=memos`, `WAKU_MEMOS_BASE_URL`, and a scoped `WAKU_MEMOS_TOKEN`. Waku waits for extraction, authority, and search projection before reading the write. |
 | Mock calendar (ICS + SQLite) | Apple / Google Calendar | `WAKU_APPLE_CALENDAR=1` (macOS) or `WAKU_GOOGLE_CALENDAR=1` with `pip install -e '.[gcal]'` — the tool schema stays |
 | Hand-built memory pillars | mem0 / Zep / LangMem | `pip install -e '.[arena]'` and set `WAKU_SEMANTIC_STORE` — then race them against each other in the Arena's Memory tab. [Where to see your memories in each provider's own console](docs/memory-backends-playbook.md) |
 

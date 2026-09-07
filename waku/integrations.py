@@ -200,6 +200,24 @@ INTEGRATIONS: tuple[Integration, ...] = (
                  EnvField("NOTION_EPISODES_DATABASE_ID", "Episodes database ID", required=True)),
                 "notion", "notion_client", "https://www.notion.so/my-integrations", ReloadMode.AGENT,
                 lambda env: env.get("WAKU_EPISODIC_STORE") == "notion", None, _notion_normalize),
+    Integration("memos", "Memory & Storage", "MemOS",
+                "Stores semantic memory in a scoped, versioned MemOS service.",
+                (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
+                          default="sqlite", options=("sqlite", "memos")),
+                 EnvField("WAKU_MEMOS_BASE_URL", "Base URL", default="http://127.0.0.1:8080"),
+                 EnvField("WAKU_MEMOS_TOKEN", "Bearer token", required=True, secret=True,
+                          help="The verified token supplies tenant, user, agent and roles. Add "
+                               "PROJECT_MEMORY_WRITER when Waku may store project facts."),
+                 EnvField("WAKU_MEMOS_SETTLE_SECONDS", "Max materialization wait (s)",
+                          default="120",
+                          help="Waku waits for extraction, authority and projection before add() "
+                               "returns, so immediate reads do not race the worker."),
+                 EnvField("WAKU_MEMOS_MIN_FUSED_SCORE", "Minimum fused retrieval score",
+                          default="0.02",
+                          help="The default removes rank-only single-channel RRF hits. Set 0 to "
+                               "retain vector-only candidates and measure that trade-off.")),
+                None, None, "https://github.com/Zhi-Xiang-Guo/memos", ReloadMode.AGENT,
+                lambda env: env.get("WAKU_SEMANTIC_STORE") == "memos", None),
     Integration("mem0", "Memory & Storage", "Mem0", "Stores semantic memory in the Mem0 service.",
                 (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
                           default="sqlite", options=("sqlite", "mem0")),
@@ -486,6 +504,21 @@ def _notion_probe(values: Mapping[str, str]) -> None:
     NotionEpisodeStore(values.get("NOTION_TOKEN"), values.get("NOTION_EPISODES_DATABASE_ID"))
 
 
+def _memos_probe(values: Mapping[str, str]) -> None:
+    base_url = (values.get("WAKU_MEMOS_BASE_URL", "") or "http://127.0.0.1:8080").rstrip("/")
+    token = values.get("WAKU_MEMOS_TOKEN", "")
+    request = urllib.request.Request(
+        base_url + "/v1/memories?limit=1",
+        headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - configured service
+        if response.status >= 300:
+            raise ValueError(f"MemOS returned HTTP {response.status}")
+        payload = json.loads(response.read(1024 * 1024))
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise TypeError("MemOS returned an invalid memory page")
+
+
 def _google_calendar_probe(values: Mapping[str, str]) -> None:
     from waku.config import load_settings
     from waku.tools import calendar
@@ -555,6 +588,8 @@ def _probed(integration: Integration) -> Integration:
         return Integration(**{**integration.__dict__, "probe": _google_calendar_probe})
     if integration.key == "notion":
         return Integration(**{**integration.__dict__, "probe": _notion_probe})
+    if integration.key == "memos":
+        return Integration(**{**integration.__dict__, "probe": _memos_probe})
     if integration.key == "tavily":
         return Integration(**{**integration.__dict__, "probe": _tavily_probe})
     if integration.key == "otel":

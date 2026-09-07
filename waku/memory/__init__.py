@@ -77,6 +77,10 @@ class Memory:
             from waku.memory.semantic.langmem_store import LangMemFactStore
 
             return LangMemFactStore(settings)
+        if settings.semantic_store == "memos":
+            from waku.memory.semantic.memos_store import MemosFactStore
+
+            return MemosFactStore(settings)
         return SqliteFactStore(conn)
 
     @staticmethod
