@@ -61,6 +61,30 @@ which hides the memory in the request transaction and lets the fenced worker rem
 content and projections. Waku's flat fact view does not show the retained version history or
 transition log; inspect those through MemOS.
 
+### Failure boundary (2026-09-07)
+
+`search`, `search_with_ids`, and `list` return an empty list only for a valid
+empty result (or an empty/disabled local query). Transport and malformed-response
+failures raise content-safe `MemosError`. The management tool registry surfaces
+that error instead of telling the model that no matching fact exists. Gated
+retrieval callers must explicitly choose an unavailable-memory policy; this
+adapter does not silently fall back to an unscoped store or fabricate a miss.
+Underlying transport/JSON exception chains are suppressed to avoid exposing
+response content in normal formatted tracebacks. This is not a guarantee that
+all application instrumentation is content-safe.
+
+The management tool preserves backend-owned fact IDs, including UUIDs and opaque
+strings, through update/delete. It does not coerce every fact ID to an integer.
+
+Remaining limitations: materialization success does not by itself prove that
+extraction accepted a useful fact; update is multi-step and may partially apply;
+write transport failures can still be collapsed to `False`; caller retries
+create new operation identities; polling socket timeouts are not yet bounded by
+the remaining settle deadline. Do not present this adapter as exactly-once,
+atomic-update, strict end-to-end deadline, or production-availability evidence.
+The regression tests in `evals/deterministic/test_memos_fact_store.py` prove the
+read-error and opaque-ID contracts only; live conformance is separate evidence.
+
 Waku defaults `WAKU_MEMOS_MIN_FUSED_SCORE` to `0.02`. With MemOS's current RRF constant this
 filters a rank-only hit from one candidate channel while retaining evidence corroborated by two
 channels. Set it to `0` when vector-only recall matters more, and measure the resulting miss rate;

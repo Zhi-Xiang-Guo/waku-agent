@@ -96,31 +96,28 @@ class MemosFactStore:
     def list(self, limit: int = 200) -> list[dict]:
         if limit < 1:
             return []
-        try:
-            summaries: list[dict[str, Any]] = []
-            cursor: str | None = None
-            while len(summaries) < limit:
-                query = {"limit": min(50, limit - len(summaries))}
-                if cursor:
-                    query["cursor"] = cursor
-                page = self._request("GET", "/v1/memories?" + urlencode(query))
-                items = page.get("items")
-                if not isinstance(items, list):
-                    raise MemosError("MemOS memory page is malformed")
-                summaries.extend(item for item in items if isinstance(item, dict))
-                cursor = page.get("nextCursor")
-                if not isinstance(cursor, str) or not cursor:
-                    break
-            rows: list[dict] = []
-            for summary in summaries[:limit]:
-                memory_id = _uuid_text(summary.get("memoryId"))
-                if memory_id is None:
-                    continue
-                current = self._request("GET", f"/v1/memories/{memory_id}/current")
-                rows.extend(self._rows_from_current(summary, current))
-            return rows[:limit]
-        except (MemosError, ValueError):
-            return []
+        summaries: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while len(summaries) < limit:
+            query = {"limit": min(50, limit - len(summaries))}
+            if cursor:
+                query["cursor"] = cursor
+            page = self._request("GET", "/v1/memories?" + urlencode(query))
+            items = page.get("items")
+            if not isinstance(items, list):
+                raise MemosError("MemOS memory page is malformed")
+            summaries.extend(item for item in items if isinstance(item, dict))
+            cursor = page.get("nextCursor")
+            if not isinstance(cursor, str) or not cursor:
+                break
+        rows: list[dict] = []
+        for summary in summaries[:limit]:
+            memory_id = _uuid_text(summary.get("memoryId"))
+            if memory_id is None:
+                continue
+            current = self._request("GET", f"/v1/memories/{memory_id}/current")
+            rows.extend(self._rows_from_current(summary, current))
+        return rows[:limit]
 
     def update(self, fact_id: FactId, content: str, subject: str | None = None) -> bool:
         memory_id = _uuid_text(fact_id)
@@ -238,50 +235,45 @@ class MemosFactStore:
         query = query.strip()
         if not query or top_k < 1:
             return []
-        try:
-            response = self._retrieval(query, top_k)
-            context = response.get("context")
-            memories = response.get("memories")
-            if not isinstance(context, dict) or not isinstance(memories, list):
-                raise MemosError("MemOS retrieval response is malformed")
-            selected = context.get("selectedVersionIds")
-            if not isinstance(selected, list):
-                raise MemosError("MemOS selected context is malformed")
-            selected_ids = {value for value in selected if isinstance(value, str)}
-            rows = []
-            for memory in memories:
-                if not isinstance(memory, dict) or memory.get("versionId") not in selected_ids:
-                    continue
-                memory_id = _uuid_text(memory.get("memoryId"))
-                content = memory.get("normalizedContent")
-                score = memory.get("fusedScore")
-                if (
-                    memory_id
-                    and isinstance(content, str)
-                    and content
-                    and isinstance(score, int | float)
-                    and not isinstance(score, bool)
-                    and (
-                        score >= self.min_fused_score
-                        or _query_matches(query, _subject(memory), content)
-                    )
-                ):
-                    rows.append(
-                        {
-                            "id": memory_id,
-                            "subject": _subject(memory),
-                            "content": _display_content(content),
-                            "source": "memos",
-                            "created_at": memory.get("recordedAt"),
-                        }
-                    )
-            return rows[:top_k]
-        except (MemosError, ValueError):
-            return []
+        response = self._retrieval(query, top_k)
+        context = response.get("context")
+        memories = response.get("memories")
+        if not isinstance(context, dict) or not isinstance(memories, list):
+            raise MemosError("MemOS retrieval response is malformed")
+        selected = context.get("selectedVersionIds")
+        if not isinstance(selected, list):
+            raise MemosError("MemOS selected context is malformed")
+        selected_ids = {value for value in selected if isinstance(value, str)}
+        rows = []
+        for memory in memories:
+            if not isinstance(memory, dict) or memory.get("versionId") not in selected_ids:
+                continue
+            memory_id = _uuid_text(memory.get("memoryId"))
+            content = memory.get("normalizedContent")
+            score = memory.get("fusedScore")
+            if (
+                memory_id
+                and isinstance(content, str)
+                and content
+                and isinstance(score, int | float)
+                and not isinstance(score, bool)
+                and (
+                    score >= self.min_fused_score
+                    or _query_matches(query, _subject(memory), content)
+                )
+            ):
+                rows.append(
+                    {
+                        "id": memory_id,
+                        "subject": _subject(memory),
+                        "content": _display_content(content),
+                        "source": "memos",
+                        "created_at": memory.get("recordedAt"),
+                    }
+                )
+        return rows[:top_k]
 
-    def _wait_until_not_selected(
-        self, version_ids: set[str], query: str, timeout: float
-    ) -> bool:
+    def _wait_until_not_selected(self, version_ids: set[str], query: str, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             response = self._retrieval(query, max(self.top_k, len(version_ids)))
@@ -388,14 +380,14 @@ class MemosFactStore:
         try:
             with self._opener(request, timeout=self.timeout) as response:
                 raw = response.read(_MAX_RESPONSE_BYTES + 1)
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            raise MemosError("MemOS request failed") from exc
+        except (HTTPError, URLError, TimeoutError, OSError):
+            raise MemosError("MemOS request failed") from None
         if len(raw) > _MAX_RESPONSE_BYTES:
             raise MemosError("MemOS response exceeded the size limit")
         try:
             value = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise MemosError("MemOS response is not valid JSON") from exc
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise MemosError("MemOS response is not valid JSON") from None
         if not isinstance(value, dict):
             raise MemosError("MemOS response must be an object")
         return value

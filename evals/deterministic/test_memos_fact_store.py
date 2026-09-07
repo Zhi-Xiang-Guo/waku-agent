@@ -5,9 +5,11 @@ import json
 from urllib.error import URLError
 from urllib.parse import urlsplit
 
+import pytest
+
 from waku.config import Settings
 from waku.memory.semantic.base import FactStore
-from waku.memory.semantic.memos_store import MemosFactStore, _query_matches
+from waku.memory.semantic.memos_store import MemosError, MemosFactStore, _query_matches
 
 MEMORY_ID = "00000000-0000-0000-0000-000000000040"
 VERSION_ID = "00000000-0000-0000-0000-000000000020"
@@ -35,7 +37,9 @@ class _MemosApi:
 
     def __call__(self, request, timeout):
         body = json.loads(request.data) if request.data else None
-        self.requests.append((request.method, request.full_url, dict(request.headers), body, timeout))
+        self.requests.append(
+            (request.method, request.full_url, dict(request.headers), body, timeout)
+        )
         path = urlsplit(request.full_url).path
         if request.method == "POST" and path == "/v1/source-events":
             return _Response({"sourceEventId": SOURCE_ID, "disposition": "ACCEPTED"})
@@ -158,19 +162,83 @@ def test_memos_backend_satisfies_waku_contract_and_maps_every_operation(monkeypa
     assert all(request[2]["Authorization"] == "Bearer verified-token" for request in api.requests)
 
 
-def test_memos_backend_returns_misses_without_leaking_transport_failures(monkeypatch):
+def test_memos_backend_distinguishes_read_failures_from_real_misses(monkeypatch):
     def unavailable(request, timeout):
-        raise URLError("offline")
+        raise URLError("secret response content")
 
     store = _store(monkeypatch, unavailable)
 
-    assert store.search("anything") == []
-    assert store.search_with_ids("anything") == []
-    assert store.list() == []
+    for operation in (
+        lambda: store.search("anything"),
+        lambda: store.search_with_ids("anything"),
+        store.list,
+    ):
+        with pytest.raises(MemosError, match="MemOS request failed") as failure:
+            operation()
+        assert "secret" not in str(failure.value)
+        assert failure.value.__suppress_context__
+    assert store.search("") == []
     assert store.update("not-a-uuid", "changed") is False
     assert store.delete("not-a-uuid") is False
 
 
+def test_malformed_retrieval_is_an_error_not_a_miss(monkeypatch):
+    store = _store(monkeypatch, lambda request, timeout: _Response({"memories": []}))
+    with pytest.raises(MemosError, match="malformed"):
+        store.search("jacket")
+
+
+def test_empty_valid_retrieval_is_a_normal_miss(monkeypatch):
+    store = _store(
+        monkeypatch,
+        lambda request, timeout: _Response({"context": {"selectedVersionIds": []}, "memories": []}),
+    )
+    assert store.search("jacket") == []
+
+
+def test_manage_memory_surfaces_failure_instead_of_no_matching_facts(monkeypatch):
+    from types import SimpleNamespace
+
+    from waku.tools.memory_admin import make_manage_memory_tool
+    from waku.tools.registry import ToolRegistry
+
+    def unavailable(request, timeout):
+        raise URLError("secret response content")
+
+    registry = ToolRegistry()
+    registry.register(
+        make_manage_memory_tool(
+            SimpleNamespace(facts=_store(monkeypatch, unavailable), episodes=None)
+        )
+    )
+    result = registry.execute("manage_memory", {"action": "search", "query": "jacket"})
+    assert result == "Error running manage_memory: MemOS request failed"
+    assert "no matching facts" not in result
+
+
+@pytest.mark.parametrize("action", ["update", "delete"])
+@pytest.mark.parametrize("fact_id", [MEMORY_ID, "opaque-fact-id", 42, "42"])
+def test_manage_memory_preserves_backend_fact_ids(action, fact_id):
+    from types import SimpleNamespace
+
+    from waku.tools.memory_admin import make_manage_memory_tool
+    from waku.tools.registry import ToolRegistry
+
+    seen = []
+    facts = SimpleNamespace(
+        update=lambda rid, content, subject: seen.append(rid) or True,
+        delete=lambda rid: seen.append(rid) or True,
+    )
+    registry = ToolRegistry()
+    registry.register(make_manage_memory_tool(SimpleNamespace(facts=facts, episodes=None)))
+    result = registry.execute("manage_memory", {"action": action, "id": fact_id, "content": "new"})
+    assert not result.startswith("Error")
+    assert seen == [fact_id]
+
+
 def test_single_channel_hits_need_a_meaningful_query_term_overlap():
     assert _query_matches("elon launch", "launch", "The launch is in June") is True
-    assert _query_matches("nothing here matches this at all", "launch", "The launch is in June") is False
+    assert (
+        _query_matches("nothing here matches this at all", "launch", "The launch is in June")
+        is False
+    )
