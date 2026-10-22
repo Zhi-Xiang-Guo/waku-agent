@@ -28,7 +28,7 @@ class SqliteEpisodeStore:
         """Relevance first (FTS), most recent first among matches."""
         fts = _fts_query(query)
         if not fts:
-            return self.recent(top_k)
+            return self.recent(top_k) if not query.strip() else []
         rows = self.conn.execute(
             "SELECT e.happened_at, e.summary FROM episodes_fts JOIN episodes e "
             "ON e.id = episodes_fts.rowid WHERE episodes_fts MATCH ? "

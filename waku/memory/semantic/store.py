@@ -120,7 +120,7 @@ class SqliteFactStore:
     def search_with_ids(self, query: str, top_k: int = 8) -> list[dict]:
         fts = _fts_query(query)
         if not fts:
-            return self.list(top_k)
+            return self.list(top_k) if not query.strip() else []
         rows = self.conn.execute(
             "SELECT f.id, f.subject, f.content FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid "
             "WHERE facts_fts MATCH ? ORDER BY rank LIMIT ?",
