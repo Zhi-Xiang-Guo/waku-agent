@@ -50,6 +50,9 @@ def should_retrieve(
         if "{" not in text:   # a reasoning-only / truncated reply, not an error
             return True, message, "gate returned no JSON — failing open"
         decision = json.loads(text[text.index("{") : text.rindex("}") + 1])
-        return bool(decision.get("retrieve")), decision.get("query", message), decision.get("reason", "")
+        query = decision.get("query", message)
+        if decision.get("retrieve") and (not isinstance(query, str) or not query.strip()):
+            query = message
+        return bool(decision.get("retrieve")), query, decision.get("reason", "")
     except Exception as exc:
         return True, message, f"gate failed open ({type(exc).__name__})"

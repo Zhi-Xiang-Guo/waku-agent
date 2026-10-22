@@ -44,10 +44,11 @@ def test_a_yes_carries_the_search_query_through():
 
 
 def test_a_no_skips_retrieval():
-    retrieve, _query, reason = gate(
+    retrieve, query, reason = gate(
         '{"retrieve": false, "query": "", "reason": "general knowledge"}'
     )
     assert retrieve is False
+    assert query == ""
     assert reason == "general knowledge"
 
 
