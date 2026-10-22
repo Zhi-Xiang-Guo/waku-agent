@@ -40,6 +40,8 @@ runs the bootstrap and must load last**.
 Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
 `D`, then `render()` writes `VIEWS[hash](D)` into `#view`. Every mutation
 (`applyModel`, `pinModel`, `saveFact`, …) calls `refresh()` when it's done.
+Saving or cancelling a fact restores only that row. Other open fact editors
+keep the refresh guard active until each is saved or cancelled.
 
 ## Rules that bite (read before editing)
 
@@ -73,7 +75,8 @@ before changing how anything looks.
 
 ## Verifying a change (no JS test runner exists)
 
-Frontend logic is not unit-tested; verify in the browser preview:
+Some frontend logic, including Memory row editing, has deterministic Node
+evals with a stub DOM. Also verify in the browser preview:
 `make dashboard` (or the preview tool) → hard-reload `localhost:7777` → click the
 sidebar tabs and the chat dock → check the console shows **zero errors**. The
 Python side (`dashboard.py` endpoints, `_thread_history`, pins, session resume)

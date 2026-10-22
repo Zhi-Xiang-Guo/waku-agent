@@ -6,16 +6,36 @@ function editFact(id){
   const row = document.getElementById("fact-"+id); if(!row) return;
   editing = true;
   const cell = row.querySelector(".fc"); const cur = cell.textContent;
+  row.dataset.factContent = cur;
+  row.dataset.factActions = row.lastElementChild.innerHTML;
   cell.innerHTML = `<textarea class="editor" id="ef-${id}">${cur.replace(/</g,"&lt;")}</textarea>`;
   const act = row.lastElementChild;
   act.innerHTML = uiButton("save", {level: "primary", size: "sm", onclick: `saveFact(${id})`})
-    + " " + uiButton("cancel", {level: "tertiary", size: "sm", onclick: "editing=false;refresh()"});
+    + " " + uiButton("cancel", {level: "tertiary", size: "sm", onclick: `cancelFact(${id})`});
   document.getElementById("ef-"+id).focus();
 }
 async function saveFact(id){
-  const v = document.getElementById("ef-"+id).value.trim();
-  await postJSON("/api/memory", {action:"update_fact", id, content:v});
-  editing = false; refresh();
+  const editor = document.getElementById("ef-"+id);
+  const v = editor.value.trim();
+  const r = await postJSON("/api/memory", {action:"update_fact", id, content:v});
+  if (!r.ok){ alert("Error: " + (r.error || "Fact could not be saved.")); return; }
+  // A response from an old view must not close an editor opened since then.
+  if (document.getElementById("ef-"+id) !== editor) return;
+  finishFactEdit(id, v);
+}
+function cancelFact(id){
+  const row = document.getElementById("fact-"+id); if (!row) return;
+  finishFactEdit(id, row.dataset.factContent);
+}
+function finishFactEdit(id, content){
+  const row = document.getElementById("fact-"+id);
+  row.querySelector(".fc").textContent = content;
+  row.lastElementChild.innerHTML = row.dataset.factActions;
+  delete row.dataset.factContent;
+  delete row.dataset.factActions;
+  // Keep the other row editors intact until each is saved or cancelled.
+  editing = !!document.querySelector('textarea[id^="ef-"]');
+  refresh();
 }
 async function delMem(action, id){
   if(!confirm("Delete this from memory?")) return;
